@@ -70,13 +70,13 @@ export default class PlaytimeBalanceSL extends BasePlugin {
       return;
     }
 
-    let percentTeamOne = ((teamOnePlaytime / sumPercent) * 100).toFixed(2);
-    let percentTeamTwo = ((teamTwoPlaytime / sumPercent) * 100).toFixed(2);
+    let percentTeamOne = ((teamOnePlaytime / sumPercent) * 100).toFixed(0);
+    let percentTeamTwo = ((teamTwoPlaytime / sumPercent) * 100).toFixed(0);
 
     await this.server.rcon.broadcast(
       `Баланс сквадных: ${percentTeamOne}% (${teamOnePlaytime.toFixed(
-        2
-      )}ts) VS ${percentTeamTwo}% (${teamTwoPlaytime.toFixed(2)}ts)`
+        0
+      )}ts) VS ${percentTeamTwo}% (${teamTwoPlaytime.toFixed(0)}ts)`
     );
   }
 }
