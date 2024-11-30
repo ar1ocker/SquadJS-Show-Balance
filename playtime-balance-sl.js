@@ -76,7 +76,10 @@ export default class PlaytimeBalanceSL extends BasePlugin {
     await this.server.rcon.broadcast(
       `Баланс сквадных: ${percentTeamOne}% (${teamOnePlaytime.toFixed(
         0
-      )}ts) VS ${percentTeamTwo}% (${teamTwoPlaytime.toFixed(0)}ts)`
+      )} часов) VS ${percentTeamTwo}% (${teamTwoPlaytime.toFixed(0)} часов)`
+    );
+    await this.server.rcon.broadcast(
+      `Всего часов сквадных за обе команды: ${(teamOnePlaytime + teamTwoPlaytime).toFixed(0)}`
     );
   }
 }
