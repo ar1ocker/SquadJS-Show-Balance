@@ -1,15 +1,9 @@
 {
   "editor.formatOnSave": true,
   "eslint.format.enable": false,
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "prettier.resolveGlobalModules": true,
+  "prettier.printWidth": 120,
   "[javascript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-  "prettier.resolveGlobalModules": true,
-  "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": "explicit"
-  },
-  "eslint.workingDirectories": [{ "mode": "location" }],
-  "eslint.useFlatConfig": true,
-  "prettier.printWidth": 120
 }

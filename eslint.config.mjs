@@ -1,4 +1,4 @@
 import globals from "globals";
 import pluginJs from "@eslint/js";
 
-export default [{ languageOptions: { globals: globals.node } }, pluginJs.configs.all];
+export default [{ languageOptions: { globals: globals.node } }, pluginJs.configs.recommended];
