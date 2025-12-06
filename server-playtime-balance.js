@@ -26,6 +26,8 @@ export default class ServerPlaytimeBalance extends BasePlugin {
             role_regex: "", // optional, regex of player role
             is_leader: false, // optional, true or false
             is_cmd: true, // optional, true or not defined
+            percentile: 0.95, // optional
+            min_players_for_percentile: 70, //optional, but required if percentile setup
           },
         ],
       },
@@ -54,7 +56,7 @@ export default class ServerPlaytimeBalance extends BasePlugin {
 
   async mount() {
     for (const balance of this.options.balances) {
-      this.registerListCommands(balance.commands, (data) => this.calculateAndBroadcastBalance(data, balance));
+      this.registerListCommands(balance.commands, (data) => this.processBalanceCommand(data, balance));
     }
   }
 
@@ -63,77 +65,143 @@ export default class ServerPlaytimeBalance extends BasePlugin {
    * @param {*} data
    * @param {BalanceConfigMockUp} balanceConfig
    */
-  async calculateAndBroadcastBalance(data, balanceConfig) {
-    let teamOneSteamIDs;
-    let teamTwoSteamIDs;
+  async processBalanceCommand(data, balanceConfig) {
+    let teamOneSteamIDs = this.getSteamIDsByConfig(1, balanceConfig);
+    let teamTwoSteamIDs = this.getSteamIDsByConfig(2, balanceConfig);
 
-    if (balanceConfig.is_cmd) {
-      teamOneSteamIDs = this.server.players
-        .filter((player) => player.teamID === 1 && player.isLeader && player.squad?.squadName === "Command Squad")
-        .map((player) => player.steamID);
+    let playtimes = await this.requestHoursBySteamIDs([...teamOneSteamIDs, ...teamTwoSteamIDs]);
 
-      teamTwoSteamIDs = this.server.players
-        .filter((player) => player.teamID === 2 && player.isLeader && player.squad?.squadName === "Command Squad")
-        .map((player) => player.steamID);
-    } else {
-      teamOneSteamIDs = this.server.players
-        .filter(
-          (player) =>
-            player.teamID === 1 &&
-            (balanceConfig.is_leader !== undefined ? player.isLeader === balanceConfig.is_leader : true) &&
-            (balanceConfig.role_regex ? player.role.match(balanceConfig.role_regex) : true)
-        )
-        .map((player) => player.steamID);
-
-      teamTwoSteamIDs = this.server.players
-        .filter(
-          (player) =>
-            player.teamID === 2 &&
-            (balanceConfig.is_leader !== undefined ? player.isLeader === balanceConfig.is_leader : true) &&
-            (balanceConfig.role_regex ? player.role.match(balanceConfig.role_regex) : true)
-        )
-        .map((player) => player.steamID);
+    if (playtimes === TIME_IS_UNKNOWN) {
+      await this.server.rcon.warn(data.player.steamID, "Ошибка при расчете баланса, повторите позже");
+      return;
     }
 
-    await this.broadcastBalanceByPlayers(data.player, teamOneSteamIDs, teamTwoSteamIDs, balanceConfig.name);
+    let sumHours = playtimes.reduce((prev, curr) => prev + curr.playtime, 0);
+
+    let isPercentileCalculated;
+    [playtimes, isPercentileCalculated] = this.trimPercentile(
+      playtimes,
+      balanceConfig.percentile,
+      balanceConfig.min_players_for_percentile
+    );
+
+    let sumTeamOne = 0;
+    let sumTeamTwo = 0;
+
+    for (let playtime of playtimes) {
+      if (teamOneSteamIDs.has(playtime.steamID)) {
+        sumTeamOne += playtime.playtime;
+      } else if (teamTwoSteamIDs.has(playtime.steamID)) {
+        sumTeamTwo += playtime.playtime;
+      }
+    }
+
+    if (sumTeamOne + sumTeamTwo === 0) {
+      await this.server.rcon.broadcast(`Баланс ${balanceConfig.name} неизвестен`);
+      return;
+    }
+
+    await this.broadcastBalance(
+      balanceConfig.name,
+      sumTeamOne,
+      sumTeamTwo,
+      sumHours,
+      isPercentileCalculated ? balanceConfig.percentile : null
+    );
   }
 
-  async broadcastBalanceByPlayers(requestPlayer, playersOne, playersTwo, balanceName) {
-    let [onePlaytime, twoPlaytime] = [0, 0];
+  /**
+   *
+   * @param {string} name
+   * @param {number} sumTeamOnePercentile
+   * @param {number} sumTeamTwoPercentile
+   * @param {number} sumHoursAbsolute
+   */
+  async broadcastBalance(name, sumTeamOnePercentile, sumTeamTwoPercentile, sumHoursAbsolute, percentile) {
+    const teamOnePercent = ((sumTeamOnePercentile / (sumTeamOnePercentile + sumTeamTwoPercentile)) * 100).toFixed(0);
+    const teamTwoPercent = ((sumTeamTwoPercentile / (sumTeamOnePercentile + sumTeamTwoPercentile)) * 100).toFixed(0);
 
-    if (playersOne.length > 0 && playersTwo.length > 0) {
-      // @ts-ignore
-      [onePlaytime, twoPlaytime] = await Promise.all([
-        this.calculateHoursBySteamIDs(playersOne),
-        this.calculateHoursBySteamIDs(playersTwo),
-      ]);
-    } else if (playersOne.length > 0) {
-      // @ts-ignore
-      onePlaytime = await this.calculateHoursBySteamIDs(playersOne);
-    } else if (playersTwo.length > 0) {
-      // @ts-ignore
-      twoPlaytime = await this.calculateHoursBySteamIDs(playersTwo);
+    let percentileMessage = percentile ? ` | по ${percentile * 100}% игроков` : "";
+
+    let message = `Баланс ${name}: ${teamOnePercent}% VS ${teamTwoPercent}% │ ${sumTeamOnePercentile.toFixed(0)} VS ${sumTeamTwoPercentile.toFixed(0)} часов${percentileMessage}
+Всего ${sumHoursAbsolute.toFixed(0)} часов`;
+
+    this.verbose(1, message);
+    await this.server.rcon.broadcast(message);
+  }
+
+  /**
+   *
+   * @param {number} teamID
+   * @param {BalanceConfigMockUp} balanceConfig
+   */
+  getSteamIDsByConfig(teamID, balanceConfig) {
+    if (balanceConfig.is_cmd) {
+      return new Set(
+        this.server.players
+          .filter(
+            (player) => player.teamID === teamID && player.isLeader && player.squad?.squadName === "Command Squad"
+          )
+          .map((player) => player.steamID)
+      );
+    } else {
+      return new Set(
+        this.server.players
+          .filter(
+            (player) =>
+              player.teamID === teamID &&
+              (balanceConfig.is_leader !== undefined ? player.isLeader === balanceConfig.is_leader : true) &&
+              (balanceConfig.role_regex ? player.role.match(balanceConfig.role_regex) : true)
+          )
+          .map((player) => player.steamID)
+      );
+    }
+  }
+
+  /**
+   *
+   * @param {PlaytimeInfo[]} playtimes
+   * @param {number} percentile
+   * @param {number} min_players_for_percentile
+   */
+  trimPercentile(playtimes, percentile, min_players_for_percentile) {
+    if (
+      playtimes.length > 0 &&
+      percentile &&
+      min_players_for_percentile != undefined &&
+      playtimes.length >= min_players_for_percentile
+    ) {
+      let sortedPlaytimes = playtimes.sort((a, b) => a.playtime - b.playtime);
+      return [sortedPlaytimes.slice(0, Math.floor(sortedPlaytimes.length * percentile)), true];
     }
 
-    if (onePlaytime === TIME_IS_UNKNOWN || twoPlaytime === TIME_IS_UNKNOWN) {
-      await this.server.rcon.warn(requestPlayer.steamID, "Ошибка при расчете баланса, повторите позже");
-      return;
+    return [playtimes, false];
+  }
+
+  /**
+   *
+   * @param {string[]} steamIDs
+   * @returns {Promise<PlaytimeInfo[] | TIME_IS_UNKNOWN>}
+   */
+  async requestHoursBySteamIDs(steamIDs) {
+    if (steamIDs.length == 0) {
+      return [];
     }
 
-    let sumPercent = onePlaytime + twoPlaytime;
+    try {
+      let playtimeObjects = await this.playtimeAPI.requestPlaytimesBySteamIDs(steamIDs);
 
-    if (sumPercent === 0) {
-      await this.server.rcon.broadcast(`Баланс ${balanceName} неизвестен`);
-      return;
+      return playtimeObjects.map(
+        (playtimeObject) =>
+          new PlaytimeInfo(
+            playtimeObject.steamID,
+            Math.max(playtimeObject.bmPlaytime, playtimeObject.steamPlaytime) / 60 / 60
+          )
+      );
+    } catch (error) {
+      this.verbose(1, `Failed to get playtime with error: ${error}`);
+      return TIME_IS_UNKNOWN;
     }
-
-    const onePercent = ((onePlaytime / sumPercent) * 100).toFixed(0);
-    const twoPercent = ((twoPlaytime / sumPercent) * 100).toFixed(0);
-
-    await this.server.rcon.broadcast(
-      `Баланс ${balanceName}: ${onePercent}% VS ${twoPercent}%  │  ${onePlaytime.toFixed(0)} VS ${twoPlaytime.toFixed(0)} часов  
-Всего ${(onePlaytime + twoPlaytime).toFixed(0)} часов`
-    );
   }
 
   /**
@@ -146,19 +214,12 @@ export default class ServerPlaytimeBalance extends BasePlugin {
       this.server.on(`CHAT_COMMAND:${command.toLowerCase()}`, func);
     }
   }
+}
 
-  /**
-   *
-   * @param {Array<string>} steamIDs
-   * @returns {Promise<number | TIME_IS_UNKNOWN>}
-   */
-  async calculateHoursBySteamIDs(steamIDs) {
-    try {
-      return (await this.playtimeAPI.getPlayersTotalSecondsPlaytime(steamIDs)) / 60 / 60;
-    } catch (error) {
-      this.verbose(1, `Failed to get playtime with error: ${error}`);
-      return TIME_IS_UNKNOWN;
-    }
+class PlaytimeInfo {
+  constructor(steamID, playtime) {
+    this.steamID = steamID;
+    this.playtime = playtime;
   }
 }
 
@@ -170,5 +231,7 @@ class BalanceConfigMockUp {
     this.role_regex = "";
     this.is_leader = false;
     this.is_cmd = true;
+    this.percentile = 1;
+    this.min_players_for_percentile = 70;
   }
 }
