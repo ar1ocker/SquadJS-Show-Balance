@@ -50,7 +50,7 @@ export default class ServerPlaytimeBalance extends BasePlugin {
     this.playtimeAPI = new PlaytimeServiceAPI(
       this.options.playtime_service_api_url,
       this.options.playtime_service_api_secret_key,
-      SQUAD_GAME_ID
+      SQUAD_GAME_ID,
     );
   }
 
@@ -82,7 +82,7 @@ export default class ServerPlaytimeBalance extends BasePlugin {
     [playtimes, isPercentileCalculated] = this.trimPercentile(
       playtimes,
       balanceConfig.percentile,
-      balanceConfig.min_players_for_percentile
+      balanceConfig.min_players_for_percentile,
     );
 
     let sumTeamOne = 0;
@@ -106,7 +106,7 @@ export default class ServerPlaytimeBalance extends BasePlugin {
       sumTeamOne,
       sumTeamTwo,
       sumHours,
-      isPercentileCalculated ? balanceConfig.percentile : null
+      isPercentileCalculated ? balanceConfig.percentile : null,
     );
   }
 
@@ -140,9 +140,13 @@ export default class ServerPlaytimeBalance extends BasePlugin {
       return new Set(
         this.server.players
           .filter(
-            (player) => player.teamID === teamID && player.isLeader && player.squad?.squadName === "Command Squad"
+            (player) =>
+              player.teamID === teamID &&
+              player.isLeader &&
+              player.squad?.squadName === "Command Squad" &&
+              player.steamID,
           )
-          .map((player) => player.steamID)
+          .map((player) => player.steamID),
       );
     } else {
       return new Set(
@@ -150,10 +154,11 @@ export default class ServerPlaytimeBalance extends BasePlugin {
           .filter(
             (player) =>
               player.teamID === teamID &&
+              player.steamID &&
               (balanceConfig.is_leader !== undefined ? player.isLeader === balanceConfig.is_leader : true) &&
-              (balanceConfig.role_regex ? player.role.match(balanceConfig.role_regex) : true)
+              (balanceConfig.role_regex ? player.role.match(balanceConfig.role_regex) : true),
           )
-          .map((player) => player.steamID)
+          .map((player) => player.steamID),
       );
     }
   }
@@ -195,8 +200,8 @@ export default class ServerPlaytimeBalance extends BasePlugin {
         (playtimeObject) =>
           new PlaytimeInfo(
             playtimeObject.steamID,
-            Math.max(playtimeObject.bmPlaytime, playtimeObject.steamPlaytime) / 60 / 60
-          )
+            Math.max(playtimeObject.bmPlaytime, playtimeObject.steamPlaytime) / 60 / 60,
+          ),
       );
     } catch (error) {
       this.verbose(1, `Failed to get playtime with error: ${error}`);
